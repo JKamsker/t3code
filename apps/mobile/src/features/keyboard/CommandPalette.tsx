@@ -326,6 +326,13 @@ export function CommandPalette(props: {
         run: () => openSettings(navigation, "SettingsEnvironments"),
       },
       {
+        key: "hub",
+        kind: "action",
+        title: "Manage hub",
+        searchTerms: ["home server", "offline", "machines", "sessions"],
+        run: () => openSettings(navigation, "SettingsHub"),
+      },
+      {
         key: "scheduledTasks",
         kind: "action",
         title: "Scheduled tasks",

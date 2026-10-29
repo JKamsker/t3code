@@ -4,7 +4,11 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
-import { AVAILABLE_CONNECTION_STATE, PrimaryConnectionTarget } from "../connection/model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  HubConnectionTarget,
+  PrimaryConnectionTarget,
+} from "../connection/model.ts";
 import {
   createEnvironmentPresentationAtoms,
   createEnvironmentSummaryAtoms,
@@ -139,6 +143,43 @@ describe("presentations with providers", () => {
 });
 
 describe("connection presentation", () => {
+  it("shows an offline hub source until a live route connects", () => {
+    const h = harness();
+    const source: ConnectionCatalogEntry = {
+      target: new HubConnectionTarget({
+        environmentId: FIRST,
+        label: "Worker",
+        hubEnvironmentId: SECOND,
+      }),
+      enabled: true,
+      profile: Option.none(),
+      sourceAvailability: { online: false, lastSeenAt: null },
+    };
+    const stop = h.registry.subscribe(h.full.presentationAtom(FIRST), () => {});
+    try {
+      h.registry.set(h.catalog, { isReady: true, entries: new Map([[FIRST, source]]) });
+      expect(h.registry.get(h.full.presentationAtom(FIRST))?.connection.phase).toBe("offline");
+      h.registry.set(h.catalog, {
+        isReady: true,
+        entries: new Map([
+          [FIRST, { ...source, sourceAvailability: { online: true, lastSeenAt: null } }],
+        ]),
+      });
+      expect(h.registry.get(h.full.presentationAtom(FIRST))?.connection.phase).toBe("connecting");
+      h.registry.set(h.catalog, {
+        isReady: true,
+        entries: new Map([[FIRST, { ...source, routes: [source, entry(FIRST)] }]]),
+      });
+      h.registry.set(
+        h.state,
+        AsyncResult.success({ ...AVAILABLE_CONNECTION_STATE, phase: "connected" }),
+      );
+      expect(h.registry.get(h.full.presentationAtom(FIRST))?.connection.phase).toBe("connected");
+    } finally {
+      stop();
+      h.registry.dispose();
+    }
+  });
   it("presents an enabled environment as connecting until its supervisor reports", () => {
     const h = harness();
     const phase = () => h.registry.get(h.full.presentationAtom(FIRST))?.connection.phase;

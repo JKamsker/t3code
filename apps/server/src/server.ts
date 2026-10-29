@@ -203,6 +203,19 @@ import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
 import * as ServerActivation from "./serverActivation.ts";
+import * as HubArchive from "./hub/HubArchive.ts";
+import * as HubArchiveExporter from "./hub/HubArchiveExporter.ts";
+import * as HubArchiveRoutes from "./hub/HubArchiveRoutes.ts";
+import * as HubConfiguration from "./hub/HubConfiguration.ts";
+import * as HubConfigurationRoutes from "./hub/HubConfigurationRoutes.ts";
+import * as HubReconciler from "./hub/HubReconciler.ts";
+import * as HubRoutes from "./hub/hubRoutes.ts";
+import * as HubTransport from "./hub/HubTransport.ts";
+import * as HubWorker from "./hub/HubWorker.ts";
+import * as HubWorkerConfig from "./hub/HubWorkerConfig.ts";
+import * as HubSynchronization from "./hub/HubSynchronization.ts";
+import * as ConfigurationWrites from "./hub/ConfigurationWrites.ts";
+import * as Scheduler from "./scheduling/Scheduler.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
 const HTTP_ROUTER_CONFIG = {
@@ -718,6 +731,9 @@ const layerCommandReadiness = HttpRouter.middleware(
 const layerMakeRoutes = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
+      Layer.provide(HubRoutes.layerApi),
+      Layer.provide(HubArchiveRoutes.layer),
+      Layer.provide(HubConfigurationRoutes.layer),
       Layer.provide(AuthHttp.layer),
       Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
       Layer.provide(CloudHttp.layer),
@@ -732,6 +748,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
     GuestHttp.layer,
+    HubRoutes.layer,
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
@@ -1085,12 +1102,42 @@ const layerMakeServer = Layer.unwrap(
       layerRuntimeState.pipe(Layer.provide(layerLauncher)),
       layerTailscaleServe,
       layerCloudDesiredLinkReconcile,
+      Layer.effectDiscard(
+        Effect.gen(function* () {
+          const worker = yield* HubWorker.HubWorker;
+          yield* ServerActivation.forkParked(
+            Effect.gen(function* () {
+              const server = yield* HttpServer.HttpServer;
+              const address = server.address;
+              if (typeof address === "string" || !("port" in address)) return;
+              yield* worker.start(`http://${loopbackUrlHostForAddress(address)}:${address.port}`);
+            }),
+          );
+        }),
+      ),
       HeapSnapshot.layer,
     );
 
     return layerServerApplication.pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(HubWorker.layer, HubTransport.layer).pipe(
+          Layer.provideMerge(HubArchive.layer),
+          Layer.provideMerge(HubArchiveExporter.layer),
+          Layer.provideMerge(HubConfiguration.layer),
+          Layer.provideMerge(HubReconciler.layer),
+          Layer.provideMerge(HubWorkerConfig.layer),
+        ),
+      ),
       Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
       Layer.provideMerge(layerRuntimeServices),
+      Layer.provide(
+        Layer.effect(
+          Scheduler.DispatchGate,
+          Effect.map(HubSynchronization.HubSynchronization, (sync) => sync.ready),
+        ),
+      ),
+      Layer.provideMerge(HubSynchronization.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+      Layer.provideMerge(ConfigurationWrites.layer),
       Layer.provideMerge(
         McpSessionRegistry.layer.pipe(
           Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),

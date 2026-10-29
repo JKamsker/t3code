@@ -150,7 +150,10 @@ const executeEnvironmentRequest = Effect.fnUntraced(function* <
         }
         const current = yield* remote.value
           .authorizeDpopHttp({
-            expectedEnvironmentId: input.prepared.environmentId,
+            expectedEnvironmentId:
+              input.prepared.target._tag === "HubConnectionTarget"
+                ? input.prepared.target.hubEnvironmentId
+                : input.prepared.environmentId,
             ...(rejectedAccessToken === undefined ? {} : { rejectedAccessToken }),
           })
           .pipe(

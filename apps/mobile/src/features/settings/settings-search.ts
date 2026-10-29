@@ -13,6 +13,7 @@ const SETTINGS_SEARCH_TERMS = {
     "remote",
     "tailscale",
   ],
+  SettingsHub: ["home server", "machines", "offline", "sessions", "pair", "automation"],
   SettingsNotifications: ["push", "alerts", "live activity", "agent activity"],
   SettingsAppearance: [
     "theme",

@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpClient from "effect/http/HttpClient";
 
 import {
@@ -41,8 +42,13 @@ import type {
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
+  HubConnectionTarget,
 } from "./model.ts";
-import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
+import {
+  ConnectionBlockedError,
+  ConnectionTransientError,
+  type ConnectionAttemptError,
+} from "./model.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import {
   appendOrchestrationProtocol,
@@ -50,6 +56,10 @@ import {
 } from "./compatibility.ts";
 import { credentialConnectionId } from "./routes.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
+import { environmentEndpointUrl } from "../environment/endpoint.ts";
+import * as HubConnections from "./hubConnections.ts";
+import * as ManagedRelay from "../relay/managedRelay.ts";
+import { executeAuthenticatedEnvironmentHttpRequest } from "../state/environmentHttpAuth.ts";
 
 export class ConnectionResolver extends Context.Service<
   ConnectionResolver,
@@ -270,6 +280,79 @@ export const make = Effect.gen(function* () {
   const relay = yield* makeRelayBroker();
   const ssh = yield* makeSshBroker();
   const httpClient = yield* HttpClient.HttpClient;
+  const presentation = yield* ClientCapabilities.ClientPresentation;
+
+  const hub = Effect.fn("clientRuntime.connection.broker.hub")(function* (
+    target: HubConnectionTarget,
+  ) {
+    const hubs = yield* Effect.serviceOption(HubConnections.HubConnections);
+    const parent = Option.isSome(hubs)
+      ? (yield* SubscriptionRef.get(hubs.value)).get(target.hubEnvironmentId)
+      : undefined;
+    if (parent === undefined) {
+      return yield* new ConnectionTransientError({
+        reason: "endpoint-unavailable",
+        detail: "Waiting for the home server connection.",
+      });
+    }
+    const httpBaseUrl = environmentEndpointUrl(
+      parent.httpBaseUrl,
+      `/api/hub/environments/${encodeURIComponent(target.environmentId)}/`,
+    );
+    const prepared: PreparedConnection = {
+      ...parent,
+      environmentId: target.environmentId,
+      label: target.label,
+      target,
+      httpBaseUrl,
+      socketUrl: environmentEndpointUrl(httpBaseUrl, "/ws").replace(/^http/, "ws"),
+    };
+    const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
+    const remoteAuthorization = yield* Effect.serviceOption(
+      RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
+    );
+    const ticket = yield* executeAuthenticatedEnvironmentHttpRequest({
+      prepared,
+      signer,
+      remoteAuthorization,
+      group: "auth",
+      method: "POST",
+      timeoutMs: 10_000,
+      url: (urls) => urls.webSocketTicketFor({ params: { use: "rpc" } }),
+      request: ({ client, headers }) =>
+        client.webSocketTicketFor({ headers, params: { use: "rpc" } }),
+    }).pipe(
+      Effect.mapError(mapRemoteEnvironmentError),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+    );
+    const socket = new URL(prepared.socketUrl);
+    socket.searchParams.set("wsTicket", ticket.ticket);
+    if (prepared.httpAuthorization?._tag === "Dpop" && Option.isSome(signer)) {
+      const proof = yield* signer.value
+        .createProof({
+          method: "GET",
+          url: environmentEndpointUrl(httpBaseUrl, "/ws"),
+          accessToken: ticket.ticket,
+        })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new ConnectionTransientError({
+                reason: "endpoint-unavailable",
+                detail: error.message,
+              }),
+          ),
+        );
+      socket.searchParams.set("dpop", proof);
+    }
+    appendClientConnectionParams(
+      socket,
+      presentation.metadata,
+      "direct",
+      yield* readClientOwnerParams,
+    );
+    return { ...prepared, socketUrl: socket.toString() };
+  });
 
   const authorize = Effect.fn("clientRuntime.connection.broker.authorize")(function* (
     entry: ConnectionCatalogEntry,
@@ -291,6 +374,8 @@ export const make = Effect.gen(function* () {
           return relay(target);
         case "SshConnectionTarget":
           return ssh({ ...entry, target });
+        case "HubConnectionTarget":
+          return hub(target);
       }
     })();
     const { descriptor: authorizedDescriptor, ...prepared } = authorized;

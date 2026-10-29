@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ConnectionResolver from "./resolver.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
@@ -24,10 +25,15 @@ import {
   ConnectionTransientError,
   PrimaryConnectionTarget,
   SshConnectionTarget,
+  HubConnectionTarget,
+  type PreparedHttpAuthorization,
+  type PreparedConnection,
   type ConnectionTarget,
 } from "./model.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import * as RpcHttp from "../rpc/http.ts";
+import * as HubConnections from "./hubConnections.ts";
+import * as ManagedRelay from "../relay/managedRelay.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -62,6 +68,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly primaryBearerToken?: string;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
   readonly descriptorProtocolVersion?: number | null | undefined;
+  readonly reply?: (url: string, init: RequestInit) => Response | undefined;
 }) => {
   const profiles = new Map(
     (options?.profiles ?? []).map((profile) => [profile.connectionId, profile]),
@@ -127,20 +134,21 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   });
 
   const layerDependencies = Layer.mergeAll(
-    RpcHttp.layerRemoteHttpClient((() =>
+    RpcHttp.layerRemoteHttpClient(((request, init) =>
       Promise.resolve(
-        Response.json({
-          environmentId: ENVIRONMENT_ID,
-          label: "Compatible environment",
-          platform: { os: "linux", arch: "x64" },
-          serverVersion: "0.0.0-test",
-          ...(options?.descriptorProtocolVersion === undefined
-            ? { orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION }
-            : options.descriptorProtocolVersion === null
-              ? {}
-              : { orchestrationProtocolVersion: options.descriptorProtocolVersion }),
-          capabilities: { repositoryIdentity: true },
-        }),
+        options?.reply?.(String(request), init ?? {}) ??
+          Response.json({
+            environmentId: ENVIRONMENT_ID,
+            label: "Compatible environment",
+            platform: { os: "linux", arch: "x64" },
+            serverVersion: "0.0.0-test",
+            ...(options?.descriptorProtocolVersion === undefined
+              ? { orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION }
+              : options.descriptorProtocolVersion === null
+                ? {}
+                : { orchestrationProtocolVersion: options.descriptorProtocolVersion }),
+            capabilities: { repositoryIdentity: true },
+          }),
       )) satisfies typeof fetch),
     Layer.succeed(
       ConnectionProfileStore.ConnectionProfileStore,
@@ -167,6 +175,116 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
 });
 
 describe("ConnectionResolver", () => {
+  it.effect.each([
+    null,
+    { _tag: "Bearer", token: "hub-bearer" },
+    { _tag: "Dpop", accessToken: "hub-access-token", expiresAtEpochMs: 0 },
+  ] satisfies ReadonlyArray<PreparedHttpAuthorization | null>)(
+    "opens worker sockets with a ticket from the home server",
+    (httpAuthorization) =>
+      Effect.gen(function* () {
+        const calls: Array<{ url: string; init: RequestInit }> = [];
+        const proofs: ManagedRelay.ManagedRelayDpopProofInput[] = [];
+        const layerBroker = yield* makeDependencies({
+          reply: (url, init) => {
+            calls.push({ url, init });
+            return url.endsWith("/api/auth/websocket-ticket/rpc")
+              ? Response.json({ ticket: "hub-ticket", expiresAt: "2026-10-29T00:00:00Z" })
+              : undefined;
+          },
+        });
+        const broker = yield* ConnectionResolver.ConnectionResolver.pipe(
+          Effect.provide(layerBroker),
+        );
+        const hubId = EnvironmentId.make("hub");
+        const hubTarget = new PrimaryConnectionTarget({
+          environmentId: hubId,
+          label: "Home server",
+          ...ENDPOINT,
+        });
+        const parent: PreparedConnection = {
+          environmentId: hubId,
+          label: hubTarget.label,
+          target: hubTarget,
+          httpBaseUrl: ENDPOINT.httpBaseUrl,
+          socketUrl: `${ENDPOINT.wsBaseUrl}/ws`,
+          httpAuthorization,
+        };
+        const hubs = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, PreparedConnection>>(
+          new Map([[hubId, parent]]),
+        );
+        const target = new HubConnectionTarget({
+          environmentId: ENVIRONMENT_ID,
+          label: "Worker",
+          hubEnvironmentId: hubId,
+        });
+        const prepared = yield* broker.prepare(catalogEntry(target)).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.succeed(HubConnections.HubConnections, hubs),
+              Layer.succeed(ManagedRelay.ManagedRelayDpopSigner, {
+                thumbprint: Effect.succeed("hub-key"),
+                createProof: (input) =>
+                  Effect.sync(() => {
+                    proofs.push(input);
+                    return `proof-${proofs.length}`;
+                  }),
+              }),
+              Layer.succeed(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization, {
+                authorizeBearer: () => Effect.die("unused"),
+                authorizeDpop: () => Effect.die("unused"),
+                authorizeDpopHttp: ({ expectedEnvironmentId }) => {
+                  expect(expectedEnvironmentId).toBe(hubId);
+                  return Effect.succeed({
+                    environmentId: hubId,
+                    label: parent.label,
+                    httpBaseUrl: parent.httpBaseUrl,
+                    httpAuthorization: {
+                      _tag: "Dpop",
+                      accessToken: "renewed-hub-access",
+                      expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
+                    },
+                  });
+                },
+              }),
+            ),
+          ),
+        );
+        const prefix = `${ENDPOINT.httpBaseUrl}/api/hub/environments/${ENVIRONMENT_ID}`;
+        expect(calls.map((call) => call.url)).toEqual([
+          `${prefix}/api/auth/websocket-ticket/rpc`,
+          `${prefix}/.well-known/t3/environment`,
+        ]);
+        expect(prepared.httpBaseUrl).toBe(`${prefix}/`);
+        expect(prepared.httpAuthorization).toEqual(httpAuthorization);
+        const socket = new URL(prepared.socketUrl);
+        expect(socket.pathname).toBe(`/api/hub/environments/${ENVIRONMENT_ID}/ws`);
+        expect(socket.searchParams.get("wsTicket")).toBe("hub-ticket");
+        expect(socket.searchParams.get("orchestrationProtocol")).toBe("2");
+        expect(new Headers(calls[0]!.init.headers).get("authorization")).toBe(
+          httpAuthorization === null
+            ? null
+            : httpAuthorization._tag === "Bearer"
+              ? "Bearer hub-bearer"
+              : "DPoP renewed-hub-access",
+        );
+        expect(calls[0]!.init.credentials).toBe(httpAuthorization === null ? "include" : undefined);
+        if (httpAuthorization?._tag === "Dpop") {
+          expect(socket.searchParams.get("dpop")).toBe("proof-2");
+          expect(proofs).toEqual([
+            {
+              method: "POST",
+              url: `${prefix}/api/auth/websocket-ticket/rpc`,
+              accessToken: "renewed-hub-access",
+            },
+            { method: "GET", url: `${prefix}/ws`, accessToken: "hub-ticket" },
+          ]);
+        } else {
+          expect(proofs).toEqual([]);
+        }
+      }),
+  );
+
   it.effect("blocks an old host during discovery before opening orchestration RPC", () =>
     Effect.gen(function* () {
       const layerBroker = yield* makeDependencies({ descriptorProtocolVersion: null });

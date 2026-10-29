@@ -54,11 +54,7 @@ import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useNowMinute } from "../../hooks/useNowMinute";
-import {
-  useEnvironment,
-  useEnvironmentHttpBaseUrl,
-  type EnvironmentPresentation,
-} from "../../state/environments";
+import { useEnvironment, type EnvironmentPresentation } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
@@ -68,7 +64,7 @@ import { WorktreeBaseBranchPicker } from "../WorktreeBaseBranchPicker";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ConnectionStatusDot, connectionPhaseDotClassName } from "../ConnectionStatusDot";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
-import { readEnvironmentScope } from "~/state/session";
+import { readEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { EnvironmentRow, environmentTransportLabel } from "./EnvironmentRow";
 import { SettingsGroup } from "./SettingsGroup";
@@ -997,7 +993,8 @@ function WebhookEndpointField({
   const canRotate = useAtomValue(
     serverEnvironment.rotateScheduledTaskWebhookToken.permissionAtom(environmentId),
   );
-  const httpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
+  const preparedConnection = usePreparedConnection(environmentId);
+  const connection = preparedConnection._tag === "Some" ? preparedConnection.value : null;
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "webhook URL" });
   const rotate = useAtomCommand(serverEnvironment.rotateScheduledTaskWebhookToken, {
     label: "scheduled task rotate webhook token",
@@ -1007,7 +1004,11 @@ function WebhookEndpointField({
   if (!task || !endpoint) {
     return <p className="text-sm text-muted-foreground">The URL appears after you save.</p>;
   }
-  const { address: url, copyable, note } = webhookAddress(endpoint, httpBaseUrl);
+  const {
+    address: url,
+    copyable,
+    note,
+  } = webhookAddress(endpoint, connection?.httpBaseUrl ?? null, connection?.target);
   const rotateUrl = async () => {
     const confirmed =
       (await requestConfirmDialog("Rotate this webhook URL?\nThe current URL stops working.", {

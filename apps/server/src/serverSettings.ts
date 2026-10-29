@@ -43,6 +43,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { resolveSymlinkTarget } from "@t3tools/shared/symlink";
+import * as ConfigurationWrites from "./hub/ConfigurationWrites.ts";
 import * as ServerConfig from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
@@ -237,12 +238,14 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   const updateTestSettings = (
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
-    writeSemaphore.withPermits(1)(
-      Ref.get(currentSettingsRef).pipe(
-        Effect.flatMap(update),
-        Effect.flatMap(normalizeServerSettings),
-        Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
-        Effect.map(resolveTextGenerationProvider),
+    ConfigurationWrites.atomic(
+      writeSemaphore.withPermits(1)(
+        Ref.get(currentSettingsRef).pipe(
+          Effect.flatMap(update),
+          Effect.flatMap(normalizeServerSettings),
+          Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
+          Effect.map(resolveTextGenerationProvider),
+        ),
       ),
     );
 
@@ -263,7 +266,9 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
         }),
       ),
     withSettingsSnapshot: (use) =>
-      writeSemaphore.withPermits(1)(getSettings.pipe(Effect.flatMap(use))),
+      ConfigurationWrites.atomic(
+        writeSemaphore.withPermits(1)(getSettings.pipe(Effect.flatMap(use))),
+      ),
     streamChanges: Stream.empty,
     subscribeChanges: Effect.succeed(Stream.empty),
   } satisfies ServerSettingsService["Service"];
@@ -1013,47 +1018,54 @@ const make = Effect.gen(function* () {
   const updateAndPersistSettings = (
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
-    writeSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        const { settings: current, parseFailure } = yield* reloadSettings;
-        if (Option.isSome(parseFailure)) {
-          return yield* new ServerSettingsError({
-            settingsPath,
-            operation: "read-file",
-            cause: parseFailure.value,
+    ConfigurationWrites.atomic(
+      writeSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const { settings: current, parseFailure } = yield* reloadSettings;
+          if (Option.isSome(parseFailure)) {
+            return yield* new ServerSettingsError({
+              settingsPath,
+              operation: "read-file",
+              cause: parseFailure.value,
+            });
+          }
+          const updated = yield* update(current);
+          const persisted = yield* persistSettingsSecrets(current, updated);
+          const next = yield* normalizeServerSettings(persisted.settings);
+          const materialized = yield* Effect.uninterruptibleMask(() =>
+            Effect.gen(function* () {
+              const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
+              const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
+              if (Exit.isFailure(materializedExit)) {
+                yield* rollbackSecretChanges;
+                return yield* Effect.failCause(materializedExit.cause);
+              }
+              const writeExit = yield* Effect.exit(writeSettingsAtomically(next));
+              if (Exit.isFailure(writeExit)) {
+                yield* rollbackSecretChanges;
+                return yield* Effect.failCause(writeExit.cause);
+              }
+              return materializedExit.value;
+            }),
+          );
+          yield* Cache.set(settingsCache, cacheKey, {
+            settings: next,
+            parseFailure: Option.none(),
           });
-        }
-        const updated = yield* update(current);
-        const persisted = yield* persistSettingsSecrets(current, updated);
-        const next = yield* normalizeServerSettings(persisted.settings);
-        const materialized = yield* Effect.uninterruptibleMask(() =>
-          Effect.gen(function* () {
-            const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
-            const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
-            if (Exit.isFailure(materializedExit)) {
-              yield* rollbackSecretChanges;
-              return yield* Effect.failCause(materializedExit.cause);
-            }
-            const writeExit = yield* Effect.exit(writeSettingsAtomically(next));
-            if (Exit.isFailure(writeExit)) {
-              yield* rollbackSecretChanges;
-              return yield* Effect.failCause(writeExit.cause);
-            }
-            return materializedExit.value;
-          }),
-        );
-        yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });
-        yield* emitChange(next);
-        return resolveTextGenerationProvider(materialized);
-      }),
+          yield* emitChange(next);
+          return resolveTextGenerationProvider(materialized);
+        }),
+      ),
     );
 
   const withSettingsSnapshot: ServerSettingsService["Service"]["withSettingsSnapshot"] = (use) =>
-    writeSemaphore.withPermits(1)(
-      getSettingsFromCache.pipe(
-        Effect.flatMap(materializeSettingsSecrets),
-        Effect.map(resolveTextGenerationProvider),
-        Effect.flatMap(use),
+    ConfigurationWrites.atomic(
+      writeSemaphore.withPermits(1)(
+        getSettingsFromCache.pipe(
+          Effect.flatMap(materializeSettingsSecrets),
+          Effect.map(resolveTextGenerationProvider),
+          Effect.flatMap(use),
+        ),
       ),
     );
 

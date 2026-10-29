@@ -86,9 +86,13 @@ export function createEnvironmentPresentationAtoms<E>(input: {
       const connection: EnvironmentConnectionPresentation =
         entry.unsupportedReason !== undefined
           ? { phase: "unsupported", error: entry.unsupportedReason, traceId: null }
-          : state === AVAILABLE_CONNECTION_STATE && entry.enabled
-            ? { phase: "connecting", error: null, traceId: null }
-            : presentConnectionState(state);
+          : entry.target._tag === "HubConnectionTarget" &&
+              entry.sourceAvailability?.online === false &&
+              state.phase !== "connected"
+            ? { phase: "offline", error: null, traceId: null }
+            : state === AVAILABLE_CONNECTION_STATE && entry.enabled
+              ? { phase: "connecting", error: null, traceId: null }
+              : presentConnectionState(state);
       const next = {
         entry,
         connection:

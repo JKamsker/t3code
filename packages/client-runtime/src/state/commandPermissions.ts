@@ -15,10 +15,9 @@ import { createEnvironmentSessionAtoms } from "./session.ts";
 
 function makeCommandPermissions<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
-  method: string,
+  requiredScopes: (input?: unknown) => ReadonlyArray<AuthEnvironmentScope>,
 ) {
   const sessions = createEnvironmentSessionAtoms(runtime);
-  const requiredScopes = (input?: unknown) => clientRpcRequiredScopes(method, input);
   const atomsByEnvironment = Atom.family((environmentId: EnvironmentId | null) =>
     Atom.family((scopeKey: string) =>
       Atom.make((get) => {
@@ -85,7 +84,18 @@ export function createCommandPermissions<R, E>(
   }
   const existing = permissions.get(method);
   if (existing !== undefined) return existing;
-  const created = makeCommandPermissions(runtime, method);
+  const created = makeCommandPermissions(runtime, (input) =>
+    clientRpcRequiredScopes(method, input),
+  );
   permissions.set(method, created);
   return created;
+}
+
+export function createScopePermissions<R, E>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
+  scopes:
+    | ReadonlyArray<AuthEnvironmentScope>
+    | ((input?: unknown) => ReadonlyArray<AuthEnvironmentScope>),
+) {
+  return makeCommandPermissions(runtime, typeof scopes === "function" ? scopes : () => scopes);
 }

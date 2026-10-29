@@ -95,7 +95,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
   readonly persistence?: QueryPersistence<A>;
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
-  readonly refreshIntervalMs?: number;
+  readonly refreshIntervalMs?: number | ((value: A | null) => number);
   readonly refreshTrigger?: (target: {
     readonly environmentId: EnvironmentIdType;
     readonly input: Input;
@@ -536,15 +536,16 @@ const refreshOnSignalWhileRead =
   };
 
 const refreshEveryUntilFinal =
-  <V>(intervalMs: number, isFinal: (value: V) => boolean) =>
+  <V>(intervalMs: number | ((value: V) => number), isFinal: (value: V) => boolean) =>
   <A extends V>(self: Atom.Atom<A>): Atom.Atom<A> =>
     Atom.transform(
       self,
       (get) => {
         const value = get(self);
         if (!isFinal(value)) {
+          const delay = typeof intervalMs === "number" ? intervalMs : intervalMs(value);
           // @effect-diagnostics-next-line globalTimers:off - Mirrors `Atom.withRefresh`, outside an Effect runtime.
-          const handle = setTimeout(() => get.refresh(self), intervalMs);
+          const handle = setTimeout(() => get.refresh(self), delay);
           get.addFinalizer(() => clearTimeout(handle));
         }
         return value;
@@ -787,10 +788,18 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
       );
     const isFinal = (result: AsyncResult.AsyncResult<A, unknown>) =>
       options.isFinal !== undefined && Option.exists(AsyncResult.value(result), options.isFinal);
+    const refreshInterval = options.refreshIntervalMs;
     const intervalQuery =
-      options.refreshIntervalMs === undefined
+      refreshInterval === undefined
         ? queryAtom
-        : queryAtom.pipe(refreshEveryUntilFinal(options.refreshIntervalMs, isFinal));
+        : queryAtom.pipe(
+            refreshEveryUntilFinal(
+              typeof refreshInterval === "number"
+                ? refreshInterval
+                : (result) => refreshInterval(AsyncResult.getOrElse(result, () => null)),
+              isFinal,
+            ),
+          );
     const refreshTrigger = options.refreshTrigger?.(target);
     return (
       refreshTrigger === undefined
@@ -956,7 +965,7 @@ export function createEnvironmentRpcCommand<
     ) => Effect.Effect<
       EnvironmentRpcSuccess<TTag>,
       EnvironmentRpcFailure<TTag> | EnvironmentRpcUnavailableError,
-      EnvironmentSupervisor.EnvironmentSupervisor | EnvironmentRegistry.EnvironmentRegistry
+      EnvironmentSupervisor.EnvironmentSupervisor | EnvironmentRegistry.EnvironmentRegistry | R
     >;
     readonly scheduler?: AtomCommandScheduler;
     readonly concurrency?: AtomCommandConcurrency<{

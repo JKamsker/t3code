@@ -44,6 +44,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as ConfigurationWrites from "../hub/ConfigurationWrites.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as Metrics from "../observability/Metrics.ts";
@@ -2178,16 +2179,31 @@ export const layer = Layer.effect(
     });
     yield* scheduler.register("webhook-coalescing", dispatchPending());
 
+    // Domain operations below already provide their tracing spans.
     return ScheduledTaskService.of({
       list,
       subscribeList,
-      upsert,
-      setEnabled,
-      delete: deleteTask,
-      deleteForThread,
-      moveThreadTasks,
+      upsert: Effect.fnUntraced(function* (input: Parameters<typeof upsert>[0]) {
+        return yield* upsert(input);
+      }, ConfigurationWrites.atomic),
+      setEnabled: Effect.fnUntraced(function* (input: Parameters<typeof setEnabled>[0]) {
+        return yield* setEnabled(input);
+      }, ConfigurationWrites.atomic),
+      delete: Effect.fnUntraced(function* (input: Parameters<typeof deleteTask>[0]) {
+        return yield* deleteTask(input);
+      }, ConfigurationWrites.atomic),
+      deleteForThread: Effect.fnUntraced(function* (input: Parameters<typeof deleteForThread>[0]) {
+        return yield* deleteForThread(input);
+      }, ConfigurationWrites.atomic),
+      moveThreadTasks: Effect.fnUntraced(function* (input: Parameters<typeof moveThreadTasks>[0]) {
+        return yield* moveThreadTasks(input);
+      }, ConfigurationWrites.atomic),
       runNow,
-      rotateWebhookToken,
+      rotateWebhookToken: Effect.fnUntraced(function* (
+        input: Parameters<typeof rotateWebhookToken>[0],
+      ) {
+        return yield* rotateWebhookToken(input);
+      }, ConfigurationWrites.atomic),
       listWebhookDeliveries,
       getWebhookDelivery,
       triggerWebhook,

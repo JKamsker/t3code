@@ -14,17 +14,22 @@ import {
   isProjectFaviconFallbackUrl,
 } from "@t3tools/shared/projectFavicon";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import type { HttpClient } from "effect/http";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { request } from "../rpc/client.ts";
 import type { ProjectFaviconCache, ProjectFaviconTarget } from "../projectFaviconCache.ts";
 import { createEnvironmentQueryAtomFamily } from "./runtime.ts";
+import { authorizeHubSignedUrl } from "./hubMedia.ts";
 
 const ASSET_URL_REFRESH_INTERVAL_MS = 30 * 60_000;
 const ASSET_URL_STALE_TIME_MS = 5 * 60_000;
@@ -58,7 +63,9 @@ function parseAssetCollectionKey(
 
 export function resolveAssetUrl(httpBaseUrl: string, relativeUrl: string): string | null {
   try {
-    return new URL(relativeUrl, httpBaseUrl).toString();
+    return relativeUrl.startsWith("/") && !relativeUrl.startsWith("//")
+      ? environmentEndpointUrl(httpBaseUrl, relativeUrl)
+      : new URL(relativeUrl, httpBaseUrl).toString();
   } catch {
     return null;
   }
@@ -130,21 +137,26 @@ export function assetUrlStateFromResult(
 }
 
 export function createAssetEnvironmentAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, E>,
+  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | HttpClient.HttpClient | R, E>,
   localMediaEnvironment?: Atom.Atom<{
     readonly environmentId: EnvironmentId;
     readonly httpBaseUrl: string;
   } | null>,
 ) {
   const execute = Effect.fn("assets.createUrl")(function* (input: AssetCreateUrlInput) {
+    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
     const result = yield* request(WS_METHODS.assetsCreateUrl, input).pipe(Effect.result);
-    if (Result.isSuccess(result)) return result.success;
+    if (Result.isSuccess(result)) {
+      const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+      return Option.isNone(prepared)
+        ? result.success
+        : yield* authorizeHubSignedUrl(prepared.value, result.success);
+    }
     const error = result.failure;
     const resource = input.resource;
     const local = localMediaEnvironment
       ? (yield* AtomRegistry.AtomRegistry).get(localMediaEnvironment)
       : null;
-    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
     if (
       !local ||
       local.environmentId === supervisor.target.environmentId ||
@@ -163,14 +175,26 @@ export function createAssetEnvironmentAtoms<R, E>(
     const asset = yield* registry
       .run(local.environmentId, request(WS_METHODS.assetsCreateUrl, input))
       .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, () => error))));
-    return { ...asset, relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href };
+    return {
+      ...asset,
+      relativeUrl: resolveAssetUrl(local.httpBaseUrl, asset.relativeUrl) ?? asset.relativeUrl,
+    };
   });
   const createUrl = createEnvironmentQueryAtomFamily(runtime, {
     label: "environment-data:assets:create-url",
     execute,
     staleTimeMs: ASSET_URL_STALE_TIME_MS,
     idleTtlMs: ASSET_URL_IDLE_TTL_MS,
-    refreshIntervalMs: ASSET_URL_REFRESH_INTERVAL_MS,
+    refreshIntervalMs: (asset) =>
+      asset === null
+        ? ASSET_URL_REFRESH_INTERVAL_MS
+        : Math.min(
+            ASSET_URL_REFRESH_INTERVAL_MS,
+            Math.max(
+              1_000,
+              asset.expiresAt - DateTime.toEpochMillis(DateTime.nowUnsafe()) - 30_000,
+            ),
+          ),
     refreshTrigger: ({ input }) =>
       input.resource._tag === "media-file" ? localMediaEnvironment : undefined,
   });

@@ -15,6 +15,7 @@ import {
 import { BearerConnectionTarget, type ConnectionTarget } from "./model.ts";
 
 export type ConnectionRouteKind =
+  | "hub"
   | "relay"
   | "loopback"
   | "lan"
@@ -31,6 +32,8 @@ export function connectionRouteId(target: ConnectionTarget): string {
       return "primary";
     case "RelayConnectionTarget":
       return RELAY_ROUTE_ID;
+    case "HubConnectionTarget":
+      return `hub:${target.hubEnvironmentId}`;
     case "BearerConnectionTarget":
     case "SshConnectionTarget":
       return target.connectionId;
@@ -85,6 +88,8 @@ export function connectionRouteKind(route: ConnectionRoute): ConnectionRouteKind
   switch (route.target._tag) {
     case "RelayConnectionTarget":
       return "relay";
+    case "HubConnectionTarget":
+      return "hub";
     case "SshConnectionTarget":
       return "ssh";
     case "PrimaryConnectionTarget":
@@ -110,6 +115,7 @@ const ROUTE_KIND_RANK: Record<ConnectionRouteKind, number> = {
   public: 3,
   ssh: 4,
   relay: 5,
+  hub: 4,
 };
 
 export function insertRoute(
@@ -159,6 +165,8 @@ export function connectionRouteLabel(route: ConnectionRoute): string {
   switch (connectionRouteKind(route)) {
     case "relay":
       return "T3 Connect";
+    case "hub":
+      return "Home server";
     case "loopback":
       return "This device";
     case "lan":

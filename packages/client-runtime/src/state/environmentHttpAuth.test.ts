@@ -26,6 +26,7 @@ import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import {
   ConnectionTransientError,
   RelayConnectionTarget,
+  HubConnectionTarget,
   type PreparedConnection,
   type PreparedHttpAuthorization,
 } from "../connection/model.ts";
@@ -283,17 +284,38 @@ describe("authenticated environment HTTP requests", () => {
     }),
   );
 
-  it.effect.each(LOADERS)("uses current relay authorization and endpoint for $name", (loader) =>
+  it.effect.each(
+    LOADERS.flatMap((loader) => [
+      { ...loader, route: "relay" },
+      { ...loader, route: "hub" },
+    ]),
+  )("uses current authorization and endpoint for $name over $route", (loader) =>
     Effect.gen(function* () {
       const harness = makeHarness(() => Response.json(loader.response));
-      const result = yield* loader.load(harness.input).pipe(Effect.provide(harness.httpLayer));
+      const prefix = loader.route === "hub" ? "/api/hub/environments/worker" : "";
+      const prepared =
+        loader.route === "hub"
+          ? {
+              ...harness.input.prepared,
+              environmentId: EnvironmentId.make("worker"),
+              httpBaseUrl: `${CURRENT_ORIGIN}${prefix}/`,
+              target: new HubConnectionTarget({
+                environmentId: EnvironmentId.make("worker"),
+                hubEnvironmentId: TARGET.environmentId,
+                label: "Worker",
+              }),
+            }
+          : harness.input.prepared;
+      const result = yield* loader
+        .load({ ...harness.input, prepared })
+        .pipe(Effect.provide(harness.httpLayer));
 
       expect(result).toEqual(loader.expected);
       expect(harness.calls).toHaveLength(1);
       const call = harness.calls[0]!;
       const url = new URL(call.url);
       expect(url.origin).toBe(CURRENT_ORIGIN);
-      expect(url.pathname).toBe(loader.path);
+      expect(url.pathname).toBe(`${prefix}${loader.path}`);
       expect(call.init.method).toBe(loader.method);
       expect(new Headers(call.init.headers).get("authorization")).toBe("DPoP current-token");
       expect(new Headers(call.init.headers).get("dpop")).toBe("proof-1");

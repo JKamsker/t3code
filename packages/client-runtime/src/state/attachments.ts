@@ -6,9 +6,16 @@ import {
   type AttachmentDeleteInput,
   type EnvironmentId,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import type { HttpClient } from "effect/http";
 import type { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { EnvironmentRpcUnavailableError, request } from "../rpc/client.ts";
+import { authorizeHubSignedUrl } from "./hubMedia.ts";
 import {
   createEnvironmentRpcCommand,
   executeAtomQuery,
@@ -18,12 +25,29 @@ import {
 } from "./runtime.ts";
 
 export function createAttachmentEnvironmentAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
 ) {
   return {
     createUploadUrl: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:attachments:create-upload-url",
       tag: WS_METHODS.attachmentsCreateUploadUrl,
+      execute: Effect.fn("clientRuntime.state.createAttachmentUploadUrl")(function* (
+        input: AttachmentCreateUploadUrlInput,
+      ) {
+        const result = yield* request(WS_METHODS.attachmentsCreateUploadUrl, input);
+        const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+        const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+        if (Option.isNone(prepared)) return result;
+        return yield* authorizeHubSignedUrl(prepared.value, result).pipe(
+          Effect.mapError(
+            (error) =>
+              new EnvironmentRpcUnavailableError({
+                environmentId: prepared.value.environmentId,
+                message: error.message,
+              }),
+          ),
+        );
+      }),
     }),
     remove: createEnvironmentRpcCommand(runtime, {
       label: "environment-command:attachments:delete",

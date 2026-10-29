@@ -69,6 +69,7 @@ export function resolveDiscoveredServerUrl(environmentId: EnvironmentId, rawUrl:
     const parsed = new URL(normalizedUrl);
     if (!isLoopbackHost(parsed.hostname)) return normalizedUrl;
     const target = readPreparedConnection(environmentId)?.target;
+    if (target?._tag === "HubConnectionTarget") return rawUrl;
     if (target && reachesEnvironmentLoopback(target)) return normalizedUrl;
     return resolveEnvironmentPortTarget(
       environmentId,

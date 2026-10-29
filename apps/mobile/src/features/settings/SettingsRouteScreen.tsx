@@ -168,7 +168,22 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
   const overflowRows = useOverflowRows();
   const indexSections = useSettingsIndexSections();
   const sections = filterSettingsSections(
-    [{ rows: overflowRows }, { title: "Connections", rows: props.connections }, ...indexSections],
+    [
+      { rows: overflowRows },
+      {
+        title: "Connections",
+        rows: [
+          ...props.connections,
+          {
+            id: "SettingsHub",
+            icon: "server.rack",
+            label: "Hub",
+            target: "SettingsHub",
+          } satisfies SettingsListRow,
+        ],
+      },
+      ...indexSections,
+    ],
     query,
   );
 

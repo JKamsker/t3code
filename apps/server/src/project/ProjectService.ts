@@ -31,6 +31,7 @@ import {
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import { planThreadDeletion } from "../orchestration-v2/ThreadDeletion.ts";
+import * as ConfigurationWrites from "../hub/ConfigurationWrites.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -336,63 +337,63 @@ export const make = Effect.gen(function* () {
     return Option.isNone(row) ? Option.none() : Option.some(yield* hydrate(row.value));
   });
 
-  const create: ProjectService["Service"]["create"] = Effect.fn("ProjectService.create")(
-    function* (input) {
-      const workspaceRoot = yield* normalizeWorkspaceRoot({
-        projectId: input.projectId,
-        workspaceRoot: input.workspaceRoot,
-        createIfMissing: input.createWorkspaceRootIfMissing ?? false,
-      });
-      yield* commit({
-        type: "project.create",
-        commandId: input.commandId,
-        projectId: input.projectId,
-        title: input.title,
-        workspaceRoot,
-        ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
-      });
-      yield* projectEnrichment.invalidate([workspaceRoot]);
-      return yield* readCommitted(input.projectId);
-    },
-  );
+  const create: ProjectService["Service"]["create"] = Effect.fn("ProjectService.create")(function* (
+    input,
+  ) {
+    const workspaceRoot = yield* normalizeWorkspaceRoot({
+      projectId: input.projectId,
+      workspaceRoot: input.workspaceRoot,
+      createIfMissing: input.createWorkspaceRootIfMissing ?? false,
+    });
+    yield* commit({
+      type: "project.create",
+      commandId: input.commandId,
+      projectId: input.projectId,
+      title: input.title,
+      workspaceRoot,
+      ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
+    });
+    yield* projectEnrichment.invalidate([workspaceRoot]);
+    return yield* readCommitted(input.projectId);
+  }, ConfigurationWrites.atomic);
 
-  const update: ProjectService["Service"]["update"] = Effect.fn("ProjectService.update")(
-    function* (input) {
-      const existing = yield* readRow(input.projectId);
-      if (Option.isNone(existing)) {
-        return yield* new ProjectNotFoundError({ projectId: input.projectId });
-      }
-      const previousRoot = existing.value.workspaceRoot;
-      const workspaceRoot =
-        input.workspaceRoot === undefined
-          ? previousRoot
-          : yield* normalizeWorkspaceRoot({
-              projectId: input.projectId,
-              workspaceRoot: input.workspaceRoot,
-            });
-      yield* commit({
-        type: "project.meta.update",
-        commandId: input.commandId,
-        projectId: input.projectId,
-        ...(input.title === undefined ? {} : { title: input.title }),
-        ...(workspaceRoot === previousRoot ? {} : { workspaceRoot }),
-        ...(input.defaultModelSelection === undefined
-          ? {}
-          : { defaultModelSelection: input.defaultModelSelection }),
-        ...(input.autoPull === undefined ? {} : { autoPull: input.autoPull }),
-        ...(input.projectIcon === undefined ? {} : { projectIcon: input.projectIcon }),
-        ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
-        ...(input.defaultThreadEnvMode === undefined
-          ? {}
-          : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
-        ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
-      });
-      if (workspaceRoot !== previousRoot) {
-        yield* projectEnrichment.invalidate([previousRoot, workspaceRoot]);
-      }
-      return yield* readCommitted(input.projectId);
-    },
-  );
+  const update: ProjectService["Service"]["update"] = Effect.fn("ProjectService.update")(function* (
+    input,
+  ) {
+    const existing = yield* readRow(input.projectId);
+    if (Option.isNone(existing)) {
+      return yield* new ProjectNotFoundError({ projectId: input.projectId });
+    }
+    const previousRoot = existing.value.workspaceRoot;
+    const workspaceRoot =
+      input.workspaceRoot === undefined
+        ? previousRoot
+        : yield* normalizeWorkspaceRoot({
+            projectId: input.projectId,
+            workspaceRoot: input.workspaceRoot,
+          });
+    yield* commit({
+      type: "project.meta.update",
+      commandId: input.commandId,
+      projectId: input.projectId,
+      ...(input.title === undefined ? {} : { title: input.title }),
+      ...(workspaceRoot === previousRoot ? {} : { workspaceRoot }),
+      ...(input.defaultModelSelection === undefined
+        ? {}
+        : { defaultModelSelection: input.defaultModelSelection }),
+      ...(input.autoPull === undefined ? {} : { autoPull: input.autoPull }),
+      ...(input.projectIcon === undefined ? {} : { projectIcon: input.projectIcon }),
+      ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
+      ...(input.defaultThreadEnvMode === undefined
+        ? {}
+        : { defaultThreadEnvMode: input.defaultThreadEnvMode }),
+      ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
+    });
+    if (workspaceRoot !== previousRoot) {
+      yield* projectEnrichment.invalidate([previousRoot, workspaceRoot]);
+    }
+    return yield* readCommitted(input.projectId);
+  }, ConfigurationWrites.atomic);
 
   const bootstrap: ProjectService["Service"]["bootstrap"] = Effect.fn("ProjectService.bootstrap")(
     function* (input) {
@@ -517,6 +518,7 @@ export const make = Effect.gen(function* () {
       yield* projectEnrichment.invalidate([existing.value.workspaceRoot]);
       return yield* readCommitted(projectId);
     },
+    ConfigurationWrites.atomic,
   );
 
   const enrichShell = (shell: OrchestrationProjectShell) =>

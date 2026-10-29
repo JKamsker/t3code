@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import {
   EnvironmentId,
   type PreviewEvent,
@@ -95,9 +96,11 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
     rpcSession,
     isFinal,
     onAnswer,
+    refreshIntervalMs,
   }: {
     readonly refreshTrigger?: Atom.Atom<unknown>;
     readonly onAnswer?: QueryAnswerHandler<undefined, A>;
+    readonly refreshIntervalMs?: number | ((value: A | null) => number);
     readonly isFinal?: (value: A) => boolean;
     readonly idleTtlMs?: number;
     readonly persistence?: QueryPersistence<A>;
@@ -147,6 +150,7 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
     ...(idleTtlMs === undefined ? {} : { idleTtlMs }),
     ...(isFinal === undefined ? {} : { isFinal }),
     ...(onAnswer === undefined ? {} : { onAnswer }),
+    ...(refreshIntervalMs === undefined ? {} : { refreshIntervalMs }),
   });
 
   return {
@@ -926,6 +930,31 @@ describe("environment query lifecycle", () => {
             suspendOnWaiting: true,
           }),
         ).toBe("updated");
+      }),
+    ),
+  );
+
+  it.effect("refreshes using each answer's validity period", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+        let executions = 0;
+        const harness = yield* makeEnvironmentQueryHarness(
+          Effect.sync(() => (executions += 1)),
+          { refreshIntervalMs: (answer) => (answer ?? 1) * 1_000 },
+        );
+        const registry = AtomRegistry.make();
+        yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+        registry.mount(harness.atom);
+        const read = readEnvironmentQuery(registry, harness.atom);
+        expect(yield* read).toBe(1);
+        vi.advanceTimersByTime(1_000);
+        expect(yield* read).toBe(2);
+        vi.advanceTimersByTime(1_000);
+        expect(executions).toBe(2);
+        vi.advanceTimersByTime(1_000);
+        expect(yield* read).toBe(3);
       }),
     ),
   );

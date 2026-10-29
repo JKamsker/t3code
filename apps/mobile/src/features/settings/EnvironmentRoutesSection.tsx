@@ -35,6 +35,7 @@ const ICON_SIZE = Platform.OS === "android" ? 24 : 22;
 const REMOVE_SIZE = 20;
 
 const ROUTE_ICONS: Record<ConnectionRouteKind, AppSymbolName> = {
+  hub: "server.rack",
   relay: "cloud",
   loopback: "desktopcomputer",
   lan: "wifi",

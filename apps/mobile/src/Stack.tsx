@@ -98,6 +98,7 @@ import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsD
 import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
+import { SettingsHubRouteScreen } from "./features/settings/SettingsHubRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsFollowUpRouteScreen } from "./features/settings/SettingsFollowUpRouteScreen";
 import {
@@ -242,6 +243,11 @@ const SETTINGS_SCREENS = {
       headerShown: Platform.OS !== "android",
       headerBackVisible: false,
     },
+  }),
+  SettingsHub: createNativeStackScreen({
+    screen: SettingsHubRouteScreen,
+    linking: "settings/hub",
+    options: { ...SETTINGS_PAGE_OPTIONS, title: "Hub" },
   }),
   SettingsEnvironments: createNativeStackScreen({
     screen: SettingsEnvironmentsRouteScreen,

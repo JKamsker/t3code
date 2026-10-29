@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import type { ConnectionTarget, SupervisorConnectionState } from "./model.ts";
 import { connectionRouteId, connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
+import { environmentEndpointUrl } from "../environment/endpoint.ts";
 
 export type EnvironmentConnectionPhase =
   | "available"
@@ -103,6 +104,7 @@ export function environmentMcpUrl(input: {
   readonly relayHttpBaseUrl?: string | undefined;
   readonly connectedTarget?: ConnectionTarget | null | undefined;
 }): string | null {
+  if (input.connectedTarget?._tag === "HubConnectionTarget") return null;
   const connectedRouteId = input.connectedTarget ? connectionRouteId(input.connectedTarget) : null;
   const routes = connectionRoutes(input.entry);
   const connectedRoute = routes.find(
@@ -126,10 +128,7 @@ function mcpUrlFromBase(httpBaseUrl: string): string | null {
   } catch {
     return null;
   }
-  url.pathname = "/mcp";
-  url.search = "";
-  url.hash = "";
-  return url.toString();
+  return environmentEndpointUrl(url.toString(), "/mcp");
 }
 
 export function connectionCatalogDisplayUrl(entry: ConnectionCatalogEntry): string | null {
@@ -137,6 +136,7 @@ export function connectionCatalogDisplayUrl(entry: ConnectionCatalogEntry): stri
     case "PrimaryConnectionTarget":
       return entry.target.httpBaseUrl;
     case "RelayConnectionTarget":
+    case "HubConnectionTarget":
       return null;
     case "BearerConnectionTarget":
       return Option.isSome(entry.profile) && entry.profile.value._tag === "BearerConnectionProfile"

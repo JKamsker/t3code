@@ -1189,7 +1189,13 @@ function WebhookScheduleDetails({
   const httpBaseUrl =
     preparedConnection._tag === "Some" ? preparedConnection.value.httpBaseUrl : null;
   const webhook = task?.schedule.type === "webhook" ? task.webhook : undefined;
-  const resolved = webhook ? webhookAddress(webhook, httpBaseUrl) : null;
+  const resolved = webhook
+    ? webhookAddress(
+        webhook,
+        httpBaseUrl,
+        preparedConnection._tag === "Some" ? preparedConnection.value.target : undefined,
+      )
+    : null;
   return (
     <View className="gap-2 border-t border-border-subtle px-4 py-3">
       <Text className="text-sm text-foreground-muted">

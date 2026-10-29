@@ -8,6 +8,11 @@ import * as Semaphore from "effect/Semaphore";
 
 import { forkParked } from "../serverActivation.ts";
 
+export class DispatchGate extends Context.Reference<Effect.Effect<boolean>>(
+  "t3/scheduling/DispatchGate",
+  { defaultValue: () => Effect.succeed(true) },
+) {}
+
 export class Scheduler extends Context.Service<
   Scheduler,
   {
@@ -19,6 +24,7 @@ export class Scheduler extends Context.Service<
 >()("t3/scheduling/Scheduler") {}
 
 const make = Effect.gen(function* () {
+  const dispatchGate = yield* DispatchGate;
   const sources = yield* Ref.make(new Map<symbol, Effect.Effect<void>>());
   const register: Scheduler["Service"]["register"] = Effect.fn("Scheduler.register")(function* <
     E,
@@ -27,7 +33,7 @@ const make = Effect.gen(function* () {
     const scope = yield* Effect.scope;
     const context = yield* Effect.context<R>();
     const permit = yield* Semaphore.make(1);
-    const run = runDueWork.pipe(
+    const run = Effect.flatMap(dispatchGate, (ready) => (ready ? runDueWork : Effect.void)).pipe(
       Effect.provideContext(context),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)

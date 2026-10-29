@@ -11,8 +11,14 @@ vi.mock("~/env", () => env);
 describe("browser target resolver", () => {
   beforeEach(() => readPreparedConnection.mockReset());
 
-  it("refuses public relay hosts until the authenticated gateway exists", async () => {
-    readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://relay.example.com" });
+  it.each([
+    { httpBaseUrl: "https://relay.example.com" },
+    {
+      httpBaseUrl: "http://192.168.1.25:3773/api/hub/environments/worker/",
+      target: { _tag: "HubConnectionTarget" },
+    },
+  ])("leaves loopback links for routes without a preview gateway", async (connection) => {
+    readPreparedConnection.mockReturnValue(connection);
     const { resolveDiscoveredServerUrl } = await import("./browserTargetResolver");
     expect(
       resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "http://localhost:5173"),

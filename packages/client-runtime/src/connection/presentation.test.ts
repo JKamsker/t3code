@@ -11,6 +11,7 @@ import {
   BearerConnectionTarget,
   ConnectionTransientError,
   RelayConnectionTarget,
+  HubConnectionTarget,
   type SupervisorConnectionState,
 } from "./model.ts";
 import { environmentMcpUrl, presentConnectionState } from "./presentation.ts";
@@ -80,6 +81,16 @@ describe("connection presentation", () => {
       "http://100.115.1.44:3773/mcp",
     );
     expect(environmentMcpUrl({ entry })).toBe("http://192.168.4.53:3773/mcp");
+    expect(
+      environmentMcpUrl({
+        entry,
+        connectedTarget: new HubConnectionTarget({
+          environmentId: TARGET.environmentId,
+          label: TARGET.label,
+          hubEnvironmentId: EnvironmentId.make("hub"),
+        }),
+      }),
+    ).toBeNull();
   });
 
   // regression: #16909 Copy MCP URL falls back to an alternate route when the relay route has no address

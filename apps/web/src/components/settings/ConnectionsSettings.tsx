@@ -133,6 +133,7 @@ import {
   SavedBackendListRow,
 } from "./SavedEnvironmentRows";
 import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
+import { HubSettings } from "../hub/HubSettings";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
@@ -1535,6 +1536,7 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
         />
       ))}
       <LoadBalancingSettings environments={loadBalancingEnvironments} />
+      <HubSettings />
       <PullRequestRoutingSettings environments={loadBalancingEnvironments} />
     </SettingsPageContainer>
   );

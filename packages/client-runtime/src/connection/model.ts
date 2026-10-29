@@ -39,11 +39,20 @@ export class SshConnectionTarget extends Schema.TaggedClass<SshConnectionTarget>
   },
 ) {}
 
+export class HubConnectionTarget extends Schema.TaggedClass<HubConnectionTarget>()(
+  "HubConnectionTarget",
+  {
+    ...ConnectionTargetBase,
+    hubEnvironmentId: EnvironmentId,
+  },
+) {}
+
 export const ConnectionTarget = Schema.Union([
   PrimaryConnectionTarget,
   BearerConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
+  HubConnectionTarget,
 ]);
 export type ConnectionTarget = typeof ConnectionTarget.Type;
 
@@ -51,6 +60,7 @@ export const PersistedConnectionTarget = Schema.Union([
   BearerConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
+  HubConnectionTarget,
 ]);
 export type PersistedConnectionTarget = typeof PersistedConnectionTarget.Type;
 

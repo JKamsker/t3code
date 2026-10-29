@@ -30,6 +30,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as RelayDeliveryProof from "./RelayDeliveryProof.ts";
 import { WEBHOOK_MAX_BODY_BYTES } from "./webhookRoute.ts";
 import * as WebhookRoute from "./webhookRoute.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
 
 class WebhookTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.webhooks) {}
 
@@ -74,10 +75,12 @@ const handlerFor = (
     request: WebhookTriggerRequest,
   ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError>,
   secrets: ReadonlyMap<string, string> = linkedSecrets,
+  dispatchGate: Effect.Effect<boolean> = Effect.succeed(true),
 ) =>
   HttpRouter.toWebHandler(
     HttpApiBuilder.layer(WebhookTestApi).pipe(
       Layer.provide(WebhookRoute.layer),
+      Layer.provide(Layer.succeed(Scheduler.DispatchGate, dispatchGate)),
       Layer.provide(RelayDeliveryProof.layer),
       Layer.provide(Layer.mock(ScheduledTaskService)({ triggerWebhook: trigger })),
       Layer.provide(
@@ -189,7 +192,7 @@ describe("webhook route", () => {
 
   it("maps service outcomes to status codes and names each outcome for the relay", async () => {
     const deliveryId = ScheduledTaskWebhookDeliveryId.make("delivery:1");
-    const cases: ReadonlyArray<[WebhookTriggerResult, number, string]> = [
+    const cases: ReadonlyArray<[WebhookTriggerResult, number, string, boolean?]> = [
       [{ _tag: "accepted", deliveryId, outcome: "accepted" }, 202, "accepted"],
       [{ _tag: "accepted", deliveryId, outcome: "duplicate" }, 202, "duplicate"],
       [{ _tag: "accepted", deliveryId, outcome: "prompt_too_long" }, 202, "prompt_too_long"],
@@ -200,13 +203,23 @@ describe("webhook route", () => {
       [{ _tag: "rate_limited", outcome: "rate_limited" }, 429, "rate_limited"],
       [{ _tag: "rate_limited", outcome: "queue_full" }, 429, "queue_full"],
       [{ _tag: "expired" }, 410, "expired"],
+      [{ _tag: "not_found" }, 503, "configuration_pending", false],
     ];
-    for (const [result, status, outcome] of cases) {
-      const { handler, dispose } = handlerFor(() => Effect.succeed(result));
+    for (const [result, status, outcome, ready = true] of cases) {
+      let reachedService = false;
+      const { handler, dispose } = handlerFor(
+        () => {
+          reachedService = true;
+          return Effect.succeed(result);
+        },
+        linkedSecrets,
+        Effect.succeed(ready),
+      );
       try {
         const response = await handler(post("/api/hooks/id/tok", "{}"));
         expect(response.status).toBe(status);
         expect(response.headers.get("x-t3-hook-outcome")).toBe(outcome);
+        expect(reachedService).toBe(ready);
         if (status === 429) expect(await response.json()).toEqual({ error: outcome });
       } finally {
         await dispose();

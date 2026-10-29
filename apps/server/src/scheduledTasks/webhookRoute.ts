@@ -13,6 +13,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Metrics from "../observability/Metrics.ts";
 import * as RelayDeliveryProof from "./RelayDeliveryProof.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
 
 /** The relay enforces the same cap. */
 export const WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -29,6 +30,7 @@ export const layer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
     const relayDeliveryProof = yield* RelayDeliveryProof.RelayDeliveryProof;
+    const dispatchGate = yield* Scheduler.DispatchGate;
     /**
      * The endpoint is raw so the signature is checked over the exact body
      * bytes; the service checks the token and signature.
@@ -41,6 +43,9 @@ export const layer = HttpApiBuilder.group(
       readonly params: { readonly hookId: string; readonly token: string };
       readonly request: HttpServerRequest.HttpServerRequest;
     }) {
+      if (!(yield* dispatchGate)) {
+        return json(503, { error: "configuration_pending" }, "configuration_pending");
+      }
       const contentLength = Number(request.headers["content-length"] ?? "0");
       if (!Number.isFinite(contentLength) || contentLength > WEBHOOK_MAX_BODY_BYTES) {
         return json(413, { error: "body_too_large" }, "body_too_large");

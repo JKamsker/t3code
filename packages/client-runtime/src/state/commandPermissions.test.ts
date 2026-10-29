@@ -12,12 +12,15 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   ThreadId,
   EnvironmentId,
   ORCHESTRATION_V2_WS_METHODS,
   ScheduledTaskId,
+  ProviderInstanceId,
+  HUB_CONFIGURATION_MANAGEMENT_SCOPES,
   WS_METHODS,
   type AuthSessionState,
   type PeerLinkSummary,
@@ -27,12 +30,14 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import { FetchHttpClient } from "effect/http";
 import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand } from "./runtime.ts";
 import { AVAILABLE_CONNECTION_STATE } from "../connection/model.ts";
 import { createPeerLinkEnvironmentAtoms } from "./peerLinks.ts";
+import { createHubEnvironmentAtoms } from "./hub.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -67,6 +72,79 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("uses hub grants and intent scopes for queued machine configuration", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const hubRuntime = Atom.runtime(
+          Layer.mergeAll(
+            Layer.succeed(EnvironmentRegistry, {
+              run: (_id: EnvironmentId, effect: Effect.Effect<unknown>) => effect,
+            } as unknown as EnvironmentRegistry["Service"]),
+            FetchHttpClient.layer,
+          ),
+        );
+        const hub = createHubEnvironmentAtoms(hubRuntime);
+        const input = {
+          environmentId: other,
+          requestId: "remove-provider",
+          expectedRevision: 0,
+          intent: {
+            type: "provider.mutate" as const,
+            mutation: {
+              operation: "remove" as const,
+              instanceId: ProviderInstanceId.make("custom"),
+            },
+          },
+        };
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthAccessWriteScope],
+            permissions: [AuthAccessWriteScope],
+          }),
+        );
+        expect(registry.get(hub.createEnrollment.permissionAtom(env))).toBe(true);
+        expect(registry.get(hub.removeEnvironment.permissionAtom(env))).toBe(true);
+        expect(registry.get(hub.enqueueConfiguration.permissionAtom(env, input))).toBe(false);
+        const denied = yield* Effect.promise(() =>
+          hub.enqueueConfiguration.run(registry, { environmentId: env, input }),
+        );
+        expect(denied._tag).toBe("Failure");
+        if (denied._tag === "Failure") {
+          expect(Cause.squash(denied.cause)).toMatchObject({
+            _tag: "EnvironmentAuthorizationError",
+            requiredPermission: AuthProvidersManageScope,
+          });
+        }
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthAccessWriteScope, AuthProvidersManageScope],
+            permissions: [AuthAccessWriteScope, AuthProvidersManageScope],
+          }),
+        );
+        expect(registry.get(hub.enqueueConfiguration.permissionAtom(env, input))).toBe(true);
+        expect(registry.get(hub.cancelConfiguration.permissionAtom(env))).toBe(false);
+        expect(registry.get(hub.retryConfiguration.permissionAtom(env))).toBe(false);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: HUB_CONFIGURATION_MANAGEMENT_SCOPES,
+            permissions: HUB_CONFIGURATION_MANAGEMENT_SCOPES,
+          }),
+        );
+        expect(registry.get(hub.cancelConfiguration.permissionAtom(env))).toBe(true);
+        expect(registry.get(hub.retryConfiguration.permissionAtom(env))).toBe(true);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(hub.enqueueConfiguration.permissionAtom(other, input))).toBe(false);
+      }),
+    ),
+  );
+
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {

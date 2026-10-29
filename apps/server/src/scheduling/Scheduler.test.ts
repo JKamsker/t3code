@@ -89,6 +89,7 @@ it.effect("unregisters closed sources and interrupts their in-flight work", () =
 it.effect("holds due work and the clock until startup recovery activates the server", () =>
   Effect.gen(function* () {
     const activation = yield* Deferred.make<void>();
+    const configurationReady = yield* Ref.make(false);
     const runs = yield* Ref.make(0);
     const ran = yield* Deferred.make<void>();
     yield* Effect.gen(function* () {
@@ -100,10 +101,15 @@ it.effect("holds due work and the clock until startup recovery activates the ser
       yield* TestClock.adjust("10 seconds");
       assert.equal(yield* Ref.get(runs), 0);
       yield* Deferred.succeed(activation, undefined);
+      yield* TestClock.adjust("5 seconds");
+      assert.equal(yield* Ref.get(runs), 0);
+      yield* Ref.set(configurationReady, true);
+      yield* TestClock.adjust("5 seconds");
       yield* Deferred.await(ran);
     }).pipe(
       Effect.provide(Scheduler.layer),
       Effect.provideService(ServerActivation.ServerActivation, Deferred.await(activation)),
+      Effect.provideService(Scheduler.DispatchGate, Ref.get(configurationReady)),
     );
     assert.isAtLeast(yield* Ref.get(runs), 1);
   }),

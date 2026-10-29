@@ -15,6 +15,8 @@ import * as PlatformConnectionSource from "../platform/source.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
+import * as HubConnections from "./hubConnections.ts";
+import { watchHubInventories } from "./hubDiscovery.ts";
 
 export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscoveredCompatibility")(
   function* () {
@@ -89,6 +91,7 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
       const platformSource = yield* PlatformConnectionSource.PlatformConnectionSource;
       yield* watchDiscoveredCompatibility().pipe(Effect.forkScoped);
       yield* registry.start;
+      yield* watchHubInventories().pipe(Effect.forkScoped);
       yield* platformSource.registrations.pipe(
         Stream.runForEach(registry.reconcilePlatform),
         Effect.forkScoped,
@@ -98,6 +101,7 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   return layerConnectionStartup.pipe(
     Layer.provideMerge(layerConnectionServices),
     Layer.provideMerge(RemoteEnvironmentAuthorization.layer),
+    Layer.provideMerge(HubConnections.layer),
   );
 }
 

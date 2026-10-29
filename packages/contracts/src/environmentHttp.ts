@@ -57,6 +57,25 @@ import {
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
+  HubConfigurationEnqueue,
+  HubConfigurationState,
+  HubObservedConfiguration,
+} from "./hubConfiguration.ts";
+import { HubCreateEnrollment, HubEnrollmentResult, HubInventory } from "./hub.ts";
+import {
+  HubArchiveEnvironmentParams,
+  HubArchiveThreadParams,
+  HubArchiveItemParams,
+  HubArchiveAttachmentParams,
+  HubArchiveShellQuery,
+  HubArchiveHistoryQuery,
+  HubArchiveStatus,
+} from "./hubArchiveHttp.ts";
+import {
+  OrchestrationV2ThreadStreamItem,
+  OrchestrationV2GetTurnItemResult,
+} from "./orchestrationV2.ts";
+import {
   PullRequestDiffInput,
   PullRequestDiffResult,
   PullRequestOperationError,
@@ -835,6 +854,175 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.patch("webhookPatch", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint)) {}
 
+class EnvironmentHubHttpApi extends HttpApiGroup.make("hub")
+  .add(
+    HttpApiEndpoint.get("environments", "/api/hub/environments", {
+      headers: OptionalBearerHeaders,
+      success: HubInventory,
+      error: [EnvironmentAuthInvalidError, EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createEnrollment", "/api/hub/enrollments", {
+      headers: OptionalBearerHeaders,
+      payload: HubCreateEnrollment,
+      success: HubEnrollmentResult,
+      error: [EnvironmentAuthInvalidError, EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.delete("removeEnvironment", "/api/hub/environments/:environmentId/enrollment", {
+      headers: OptionalBearerHeaders,
+      params: Schema.Struct({ environmentId: TrimmedNonEmptyString }),
+      success: Schema.Struct({ removed: Schema.Boolean }),
+      error: [EnvironmentAuthInvalidError, EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+class EnvironmentHubConfigurationHttpApi extends HttpApiGroup.make("hubConfiguration")
+  .add(
+    HttpApiEndpoint.get(
+      "observedConfiguration",
+      "/api/hub/environments/:environmentId/configuration/observed",
+      {
+        headers: OptionalBearerHeaders,
+        params: Schema.Struct({ environmentId: TrimmedNonEmptyString }),
+        success: Schema.NullOr(HubObservedConfiguration),
+        error: [
+          EnvironmentAuthInvalidError,
+          EnvironmentScopeRequiredError,
+          EnvironmentHttpConflictError,
+          EnvironmentHttpInternalServerError,
+        ],
+      },
+    ).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("configuration", "/api/hub/environments/:environmentId/configuration", {
+      headers: OptionalBearerHeaders,
+      params: Schema.Struct({ environmentId: TrimmedNonEmptyString }),
+      success: HubConfigurationState,
+      error: [
+        EnvironmentAuthInvalidError,
+        EnvironmentScopeRequiredError,
+        EnvironmentHttpConflictError,
+        EnvironmentHttpInternalServerError,
+      ],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post(
+      "enqueueConfiguration",
+      "/api/hub/environments/:environmentId/configuration",
+      {
+        headers: OptionalBearerHeaders,
+        params: Schema.Struct({ environmentId: TrimmedNonEmptyString }),
+        payload: HubConfigurationEnqueue,
+        success: HubConfigurationState,
+        error: [
+          EnvironmentAuthInvalidError,
+          EnvironmentScopeRequiredError,
+          EnvironmentHttpConflictError,
+          EnvironmentHttpInternalServerError,
+        ],
+      },
+    ).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post(
+      "cancelConfiguration",
+      "/api/hub/environments/:environmentId/configuration/cancel",
+      {
+        headers: OptionalBearerHeaders,
+        params: Schema.Struct({ environmentId: TrimmedNonEmptyString }),
+        payload: Schema.Struct({ requestId: TrimmedNonEmptyString }),
+        success: HubConfigurationState,
+        error: [
+          EnvironmentAuthInvalidError,
+          EnvironmentScopeRequiredError,
+          EnvironmentHttpConflictError,
+          EnvironmentHttpInternalServerError,
+        ],
+      },
+    ).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post(
+      "retryConfiguration",
+      "/api/hub/environments/:environmentId/configuration/retry",
+      {
+        headers: OptionalBearerHeaders,
+        params: Schema.Struct({ environmentId: TrimmedNonEmptyString }),
+        success: HubConfigurationState,
+        error: [
+          EnvironmentAuthInvalidError,
+          EnvironmentScopeRequiredError,
+          EnvironmentHttpConflictError,
+          EnvironmentHttpInternalServerError,
+        ],
+      },
+    ).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+const HubArchiveErrors = [
+  EnvironmentAuthInvalidError,
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+  EnvironmentResourceNotFoundError,
+] as const;
+const HUB_ARCHIVE_PATH = "/api/hub/environments/:environmentId/archive";
+class EnvironmentHubArchiveHttpApi extends HttpApiGroup.make("hubArchive")
+  .add(
+    HttpApiEndpoint.get("archiveStatus", `${HUB_ARCHIVE_PATH}/status`, {
+      headers: OptionalBearerHeaders,
+      params: HubArchiveEnvironmentParams,
+      success: HubArchiveStatus,
+      error: HubArchiveErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("archiveShell", `${HUB_ARCHIVE_PATH}/shell`, {
+      headers: OptionalBearerHeaders,
+      params: HubArchiveEnvironmentParams,
+      query: HubArchiveShellQuery,
+      success: OrchestrationV2ShellSnapshot,
+      error: HubArchiveErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("archiveThread", `${HUB_ARCHIVE_PATH}/threads/:threadId`, {
+      headers: OptionalBearerHeaders,
+      params: HubArchiveThreadParams,
+      success: OrchestrationV2ThreadStreamItem,
+      error: HubArchiveErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("archiveHistory", `${HUB_ARCHIVE_PATH}/threads/:threadId/history`, {
+      headers: OptionalBearerHeaders,
+      params: HubArchiveThreadParams,
+      query: HubArchiveHistoryQuery,
+      success: OrchestrationV2ThreadHistoryPage,
+      error: HubArchiveErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("archiveTurnItem", `${HUB_ARCHIVE_PATH}/threads/:threadId/items/:itemId`, {
+      headers: OptionalBearerHeaders,
+      params: HubArchiveItemParams,
+      success: OrchestrationV2GetTurnItemResult,
+      error: HubArchiveErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("archiveAttachment", `${HUB_ARCHIVE_PATH}/attachments/:attachmentId`, {
+      headers: OptionalBearerHeaders,
+      params: HubArchiveAttachmentParams,
+      success: Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array()),
+      error: HubArchiveErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
@@ -843,4 +1031,7 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi)
+  .add(EnvironmentHubHttpApi)
+  .add(EnvironmentHubArchiveHttpApi)
+  .add(EnvironmentHubConfigurationHttpApi)
   .add(EnvironmentWebhooksHttpApi) {}

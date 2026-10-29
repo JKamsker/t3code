@@ -48,6 +48,7 @@ import {
   BearerConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
+  HubConnectionTarget,
   SshConnectionTarget,
   type ConnectionTarget,
   type PreparedConnection,
@@ -65,6 +66,8 @@ import * as RpcSession from "../rpc/session.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { watchDiscoveredCompatibility } from "./layer.ts";
+import { markHubUnavailable, reconcileHubInventory } from "./hubDiscovery.ts";
+import * as HubConnections from "./hubConnections.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import type { RelayEnvironmentStatusResponse } from "@t3tools/contracts/relay";
 import { runDesktopCommitWithReconnectObserver } from "../state/server.ts";
@@ -1880,6 +1883,78 @@ describe("EnvironmentRegistry routes", () => {
   });
   const lanRegistration = (target = LAN_TARGET, profile = LAN_PROFILE) =>
     new BearerConnectionRegistration({ target, profile, credential: BEARER_CREDENTIAL });
+
+  it.effect(
+    "discovers hub workers and removes revoked routes without forgetting direct connections",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness(
+          [TARGET, LAN_TARGET],
+          [LAN_PROFILE],
+          [[LAN_TARGET.connectionId, BEARER_CREDENTIAL]],
+        );
+        const workerId = EnvironmentId.make("hub-worker");
+        const worker = (environmentId: EnvironmentId) => ({
+          environmentId,
+          label: "Worker",
+          online: true,
+          lastSeenAt: "2026-10-29T00:00:00Z",
+          environment: {
+            environmentId,
+            label: "Worker",
+            platform: { os: "linux", arch: "x64" },
+            serverVersion: "1.0.0",
+            orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+            capabilities: { repositoryIdentity: true },
+          } satisfies ExecutionEnvironmentDescriptor,
+        });
+        const inventory = { environments: [worker(workerId), worker(LAN_TARGET.environmentId)] };
+        yield* Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          yield* reconcileHubInventory(TARGET.environmentId, inventory);
+          const entries = yield* SubscriptionRef.get(registry.entries);
+          expect(entries.get(workerId)?.target).toEqual(
+            new HubConnectionTarget({
+              environmentId: workerId,
+              label: "Worker",
+              hubEnvironmentId: TARGET.environmentId,
+            }),
+          );
+          expect(entries.get(workerId)?.sourceAvailability?.online).toBe(true);
+          expect(routesOf(yield* Ref.get(harness.storedTargets), LAN_TARGET.environmentId)).toEqual(
+            [
+              LAN_TARGET,
+              new HubConnectionTarget({
+                environmentId: LAN_TARGET.environmentId,
+                label: "Worker",
+                hubEnvironmentId: TARGET.environmentId,
+              }),
+            ],
+          );
+
+          yield* markHubUnavailable(TARGET.environmentId);
+          expect(
+            (yield* SubscriptionRef.get(registry.entries)).get(workerId)?.sourceAvailability,
+          ).toEqual({
+            online: false,
+            lastSeenAt: "2026-10-29T00:00:00Z",
+          });
+          yield* reconcileHubInventory(TARGET.environmentId, inventory);
+          expect(
+            (yield* SubscriptionRef.get(registry.entries)).get(workerId)?.sourceAvailability
+              ?.online,
+          ).toBe(true);
+
+          yield* reconcileHubInventory(TARGET.environmentId, { environments: [] });
+          const remaining = yield* SubscriptionRef.get(registry.entries);
+          expect(remaining.has(workerId)).toBe(false);
+          expect(remaining.get(LAN_TARGET.environmentId)?.target).toEqual(LAN_TARGET);
+          expect(routesOf(yield* Ref.get(harness.storedTargets), LAN_TARGET.environmentId)).toEqual(
+            [LAN_TARGET],
+          );
+        }).pipe(Effect.provide(Layer.mergeAll(harness.layer, HubConnections.layer)), Effect.scoped);
+      }),
+  );
 
   it.effect("adds a paired LAN route ahead of T3 Connect instead of replacing it", () =>
     Effect.gen(function* () {

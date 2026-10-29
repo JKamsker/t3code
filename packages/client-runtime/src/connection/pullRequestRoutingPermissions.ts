@@ -44,6 +44,8 @@ function routeConnectionKey(
   const entry = { profile: routeProfile };
   if (target._tag === "RelayConnectionTarget")
     return JSON.stringify([target._tag, target.environmentId]);
+  if (target._tag === "HubConnectionTarget")
+    return JSON.stringify([target._tag, target.environmentId, target.hubEnvironmentId]);
   const profile = Option.getOrNull(entry.profile);
   if (target._tag === "SshConnectionTarget") {
     if (profile?._tag !== "SshConnectionProfile") return null;

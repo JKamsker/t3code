@@ -7,6 +7,7 @@ import {
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
+  HubConnectionTarget,
   type ConnectionTarget,
 } from "./model.ts";
 
@@ -55,6 +56,10 @@ export interface ConnectionCatalogEntry {
   readonly enabled: boolean;
   readonly unsupportedReason?: string;
   readonly serverUpdateRequired?: boolean;
+  readonly sourceAvailability?: {
+    readonly online: boolean;
+    readonly lastSeenAt: string | null;
+  };
 }
 
 export class BearerConnectionCredential extends Schema.TaggedClass<BearerConnectionCredential>()(
@@ -81,6 +86,11 @@ export class RelayConnectionRegistration extends Schema.TaggedClass<RelayConnect
   },
 ) {}
 
+export class HubConnectionRegistration extends Schema.TaggedClass<HubConnectionRegistration>()(
+  "HubConnectionRegistration",
+  { target: HubConnectionTarget },
+) {}
+
 export class BearerConnectionRegistration extends Schema.TaggedClass<BearerConnectionRegistration>()(
   "BearerConnectionRegistration",
   {
@@ -104,6 +114,7 @@ export const ConnectionRegistration = Schema.Union([
   RelayConnectionRegistration,
   BearerConnectionRegistration,
   SshConnectionRegistration,
+  HubConnectionRegistration,
 ]);
 export type ConnectionRegistration = typeof ConnectionRegistration.Type;
 
@@ -125,6 +136,7 @@ export function connectionRegistrationCatalogEntry(
   switch (registration._tag) {
     case "PrimaryConnectionRegistration":
     case "RelayConnectionRegistration":
+    case "HubConnectionRegistration":
       return {
         target: registration.target,
         profile: Option.none(),

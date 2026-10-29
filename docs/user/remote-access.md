@@ -1,7 +1,49 @@
 # Remote access
 
 Connect a phone, browser, or another desktop app to T3 Code running on a different
-machine. That machine must stay running and reachable while you work.
+machine. Direct connections need that machine to stay running and reachable.
+
+## Your own home server
+
+Use a home server as a hub for your other machines. Clients pair with the hub
+once, and the machines connect out to it. A hub uses your own pairing credentials
+and does not require a T3 Connect account or allocate hosted tunnels, so the
+hosted machine limit does not apply.
+
+On the home server, run:
+
+```bash
+t3 hub serve --host <private-ip>
+```
+
+Pair your client using the server's pairing link, then open **Settings →
+Environments → Home server** and create a machine enrollment code. On each machine
+you want to connect, run:
+
+```bash
+t3 hub join https://<hub-address> --code <enrollment-code>
+```
+
+Restart that machine's T3 Code server after joining. Use a fresh enrollment code
+for each machine. The hub address must be reachable from both the clients and the
+machines; use HTTPS for a public address. You can expose only the hub through a
+private network or your own HTTPS reverse proxy.
+
+The hub keeps synchronized session history available when a machine disconnects.
+Its Home server page shows the machine's last contact and saved sessions. Live
+agent turns, terminals, and workspace operations still run on the owning machine
+and require it to be online.
+
+You can save changes to machine settings, providers, projects, and automation
+while the machine is offline. Check their pending, applied, or failed status on
+the hub. Changes take effect after the machine reconnects and accepts them;
+directories, providers, and other machine resources can only be validated then.
+A machine that cannot reach the hub continues using its last applied settings.
+
+Trust the hub as you would the machines themselves: it stores conversations and
+can administer enrolled machines. Remove a machine from the hub to revoke its
+connection. To stop a machine connecting, run `t3 hub leave` there and restart its
+server. `t3 hub status` shows which hub that machine has joined.
 
 ## T3 Connect
 

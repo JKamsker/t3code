@@ -62,6 +62,7 @@ function connectionIdOf(target: ConnectionTarget): string | null {
   switch (target._tag) {
     case "PrimaryConnectionTarget":
     case "RelayConnectionTarget":
+    case "HubConnectionTarget":
       return null;
     case "BearerConnectionTarget":
     case "SshConnectionTarget":
@@ -70,6 +71,7 @@ function connectionIdOf(target: ConnectionTarget): string | null {
 }
 
 function routeKey(target: ConnectionTarget): string {
+  if (target._tag === "HubConnectionTarget") return `hub:${target.hubEnvironmentId}`;
   return connectionIdOf(target) ?? target._tag;
 }
 
@@ -133,6 +135,7 @@ export function registerConnectionInCatalog(
 
   switch (registration._tag) {
     case "RelayConnectionRegistration":
+    case "HubConnectionRegistration":
       return next;
     case "BearerConnectionRegistration":
     case "SshConnectionRegistration":
